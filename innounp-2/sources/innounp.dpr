@@ -105,6 +105,13 @@ const
 type
   TCompressedBlockReaderClass = class of TAbstractBlockReader;
   TOverwriteAction = (oaOverwrite, oaSkip, oaAsk, oaAbort);
+
+  PFileProcessItem = ^TFileProcessItem;
+  TFileProcessItem = record
+    FileNumber: Integer;
+    FileEntry: Struct.PSetupFileEntry;
+    Location: PSetupFileLocationEntry;
+  end;
 var
   WarnOnMod:boolean=false;
   IsUnknownVersion:boolean=false;
@@ -915,6 +922,41 @@ begin
     end;
   end;
 
+function CompareFileProcessItems(Item1, Item2: Pointer): Integer;
+var
+  A, B: PFileProcessItem;
+begin
+  A := PFileProcessItem(Item1);
+  B := PFileProcessItem(Item2);
+
+  { Fake files are generated from metadata and do not advance the extractor, so
+    keep them in the original script order after real files. Real files must be
+    processed in archive order; otherwise extracting a filtered subset can jump
+    backwards inside a solid chunk and force the decompressor to replay the same
+    chunk from the beginning over and over. }
+  if (A^.FileEntry^.FileType = ftFakeFile) and (B^.FileEntry^.FileType <> ftFakeFile) then begin
+    Result := 1;
+    Exit;
+  end;
+  if (A^.FileEntry^.FileType <> ftFakeFile) and (B^.FileEntry^.FileType = ftFakeFile) then begin
+    Result := -1;
+    Exit;
+  end;
+
+  if A^.Location^.FirstSlice <> B^.Location^.FirstSlice then
+    Result := A^.Location^.FirstSlice - B^.Location^.FirstSlice
+  else if A^.Location^.StartOffset < B^.Location^.StartOffset then
+    Result := -1
+  else if A^.Location^.StartOffset > B^.Location^.StartOffset then
+    Result := 1
+  else if A^.Location^.ChunkSuboffset < B^.Location^.ChunkSuboffset then
+    Result := -1
+  else if A^.Location^.ChunkSuboffset > B^.Location^.ChunkSuboffset then
+    Result := 1
+  else
+    Result := A^.FileNumber - B^.FileNumber;
+end;
+
 procedure CopyFiles;
 { Copies all the application's files }
 var
@@ -922,26 +964,52 @@ var
   CurFile: Struct.PSetupFileEntry;
   loc:PSetupFileLocationEntry;
   FileExtractor: TFileExtractor;
+  FilesToProcess: TList;
+  Item: PFileProcessItem;
+  i: Integer;
 begin
   OverwriteAction := oaAsk;
   if (AutoYes) then OverwriteAction := oaOverwrite;
 
-  FileExtractor := CreateFileExtractor;
+  FilesToProcess := TList.Create;
   try
     for CurFileNumber := 0 to Entries[seFile].Count-1 do begin
       CurFile := Struct.PSetupFileEntry(Entries[seFile][CurFileNumber]);
       if not ShouldProcessFileEntry(CurFile) then continue;
       loc:=PSetupFileLocationEntry(Entries[seFileLocation][CurFile^.LocationEntry]);
       if not ExtractAllCopies and (loc^.PrimaryFileEntry<>-1) and (loc^.PrimaryFileEntry<>CurFileNumber) then continue;
-      with CurFile^ do begin
-        if LocationEntry <> -1 then
-          if not ProcessFileEntry('#'+IntToStr(CurFileNumber)+' '+ApplyCodepage(SourceFilename),FileExtractor,CurFile) then break;
-        end;
 
-      if (OverwriteAction = oaAbort) then break;
-    end;  //for
+      New(Item);
+      Item^.FileNumber := CurFileNumber;
+      Item^.FileEntry := CurFile;
+      Item^.Location := loc;
+      FilesToProcess.Add(Item);
+    end;
+
+    FilesToProcess.Sort(CompareFileProcessItems);
+
+    FileExtractor := CreateFileExtractor;
+    try
+      for i := 0 to FilesToProcess.Count-1 do begin
+        Item := PFileProcessItem(FilesToProcess[i]);
+        CurFile := Item^.FileEntry;
+        CurFileNumber := Item^.FileNumber;
+        with CurFile^ do begin
+          if LocationEntry <> -1 then
+            if not ProcessFileEntry('#'+IntToStr(CurFileNumber)+' '+ApplyCodepage(SourceFilename),FileExtractor,CurFile) then break;
+          end;
+
+        if (OverwriteAction = oaAbort) then break;
+      end;  //for
+    finally
+      FileExtractor.Free;
+    end;
   finally
-    FileExtractor.Free;
+    for i := 0 to FilesToProcess.Count-1 do begin
+      Item := PFileProcessItem(FilesToProcess[i]);
+      Dispose(Item);
+    end;
+    FilesToProcess.Free;
   end;
 end;
 
