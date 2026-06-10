@@ -106,6 +106,13 @@ procedure TFileExtractor6400.SeekTo(const FL: TSetupFileLocationEntry);
     Buf: array[0..65535] of Byte;
     BufSize: Cardinal;
   begin
+    if (not FChunkCompressed) and (not FChunkEncrypted) and (FOpenedSlice = FChunkLastSlice) then begin
+      FSourceF.Seek64(Int64(FSourceF.Position) + Count);
+      Dec(FChunkBytesLeft, Count);
+      Inc(FChunkDecompressedBytesRead, Count);
+      Exit;
+    end;
+
     try
       while True do begin
         BufSize := SizeOf(Buf);

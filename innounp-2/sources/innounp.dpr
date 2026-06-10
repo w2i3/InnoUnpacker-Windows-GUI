@@ -800,6 +800,10 @@ begin
       end;
     end;
   if not Result then Exit;
+  if (not QuietExtract) and ((length(FileMasks) > 0) or (length(BaseDirToStrip) > 0)) and
+     (foChunkCompressed in CurFileLocation^.Flags) and (CurFileLocation^.ChunkSuboffset > 0) then
+    WriteNormalLine(Caption, ' - seeking through '+GroupDigits(IntToStr(CurFileLocation^.ChunkSuboffset))+
+      ' bytes of prior solid-compressed data');
   WriteNormalText(Caption);
   if (ExtractTestOnly) then DestF := TNullFile.Create()
   else begin
