@@ -244,10 +244,10 @@ begin
         { Change the lower 3 bytes of the address to be relative to the
           beginning of the buffer, instead of to the next instruction. If
           decoding, do the opposite. }
-        Addr := (AddrOffset + LongWord(I) + 4) and $FFFFFF;  { may wrap, but OK }
+        Addr := LongWord((UInt64(AddrOffset) + UInt64(I) + 4) and $FFFFFF);  { may wrap, but OK }
         Rel := P[I] or (P[I+1] shl 8) or (P[I+2] shl 16);
         if not Encode then
-          Dec(Rel, Addr);
+          Rel := LongWord((UInt64(Rel) + UInt64($100000000) - UInt64(Addr)) and UInt64($FFFFFFFF));
         { For a slightly higher compression ratio, we want the resulting high
           byte to be $00 for both forward and backward jumps. The high byte
           of the original relative address is likely to be the sign extension
@@ -255,7 +255,7 @@ begin
         if Rel and $800000 <> 0 then
           P[I+3] := not P[I+3];
         if Encode then
-          Inc(Rel, Addr);
+          Rel := LongWord((UInt64(Rel) + UInt64(Addr)) and UInt64($FFFFFFFF));
         P[I] := Byte(Rel);
         P[I+1] := Byte(Rel shr 8);
         P[I+2] := Byte(Rel shr 16);
@@ -305,7 +305,7 @@ begin
         DecompressBytes(Buf, BufSize);
         if foCallInstructionOptimized in FL.Flags then begin
           TransformCallInstructions(Buf, BufSize, False, AddrOffset);
-          Inc(AddrOffset, BufSize);  { may wrap, but OK }
+          AddrOffset := LongWord((UInt64(AddrOffset) + UInt64(BufSize)) and UInt64($FFFFFFFF));  { may wrap, but OK }
         end;
         Dec64(BytesLeft, BufSize);
         SHA256Update(Context, Buf, BufSize);
