@@ -322,15 +322,15 @@ begin
   ABuf:=@ABuffer;
   if CurPos<BufSize then begin // read from the buffer
     t:=BufSize-CurPos; if t>Count then t:=Count;
-    Move(pointer(cardinal(FBuffer)+CurPos)^,ABuf^,t);
-    Inc(cardinal(ABuf),t); Dec(Count,t);
+    Move(Pointer(NativeUInt(FBuffer)+CurPos)^,ABuf^,t);
+    ABuf := Pointer(NativeUInt(ABuf)+t); Dec(Count,t);
     Inc(CurPos,t);
   end;
   if Count>0 then begin // read from the underlying object
     FBlockReader.Read(ABuf^,Count);
     if FCacheEnabled then begin // append the read bytes to the buffer
       if BufSize+Count>BufCapacity then SetCapacity(BufSize+Count);
-      Move(ABuf^,pointer(cardinal(FBuffer)+CurPos)^,Count);
+      Move(ABuf^,Pointer(NativeUInt(FBuffer)+CurPos)^,Count);
       Inc(BufSize,Count); Inc(CurPos,Count);
     end;
   end;

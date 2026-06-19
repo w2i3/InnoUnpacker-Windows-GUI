@@ -669,6 +669,7 @@ begin
     TFile.RaiseLastError;
 end;
 
+{$WARN SYMBOL_PLATFORM OFF}
 procedure TFileMapping.ReraiseInPageErrorAsFileException;
 { In Delphi, when an I/O error occurs while accessing a memory-mapped file --
   known as an "inpage error" -- the user will see an exception message of
@@ -679,27 +680,41 @@ procedure TFileMapping.ReraiseInPageErrorAsFileException;
   you'd see when doing non-memory-mapped I/O with TFile. }
 var
   E: TObject;
+  ExceptionRecord: PExceptionRecord;
+  FaultAddress: NativeUInt;
+  MapStart: NativeUInt;
+  MapEnd: NativeUInt;
 begin
   E := ExceptObject;
-  if (E is EExternalException) and
-     (EExternalException(E).ExceptionRecord.ExceptionCode = EXCEPTION_IN_PAGE_ERROR) and
-     (Cardinal(EExternalException(E).ExceptionRecord.NumberParameters) >= Cardinal(2)) and
-     (Cardinal(EExternalException(E).ExceptionRecord.ExceptionInformation[1]) >= Cardinal(FMemory)) and
-     (Cardinal(EExternalException(E).ExceptionRecord.ExceptionInformation[1]) < Cardinal(Cardinal(FMemory) + FMapSize)) then begin
+  if not (E is EExternalException) then
+    Exit;
+
+  ExceptionRecord := EExternalException(E).ExceptionRecord;
+  if (ExceptionRecord.ExceptionCode <> EXCEPTION_IN_PAGE_ERROR) or
+     (NativeUInt(ExceptionRecord.NumberParameters) < 2) then
+    Exit;
+
+  FaultAddress := NativeUInt(ExceptionRecord.ExceptionInformation[1]);
+  MapStart := NativeUInt(FMemory);
+  MapEnd := MapStart + NativeUInt(FMapSize);
+
+  if (FaultAddress >= MapStart) and (FaultAddress < MapEnd) then begin
     { There should be a third parameter containing the NT status code of the error
       condition that caused the exception. Convert that into a Win32 error code
       and use it to generate our error message. }
-    if (Cardinal(EExternalException(E).ExceptionRecord.NumberParameters) >= Cardinal(3)) and
+    if (NativeUInt(ExceptionRecord.NumberParameters) >= 3) and
        Assigned(_RtlNtStatusToDosError) then
-      TFile.RaiseError(_RtlNtStatusToDosError(EExternalException(E).ExceptionRecord.ExceptionInformation[2]))
+      TFile.RaiseError(_RtlNtStatusToDosError(
+        NTSTATUS(ExceptionRecord.ExceptionInformation[2])))
     else begin
       { Use generic "The system cannot [read|write] to the specified device" errors }
-      if EExternalException(E).ExceptionRecord.ExceptionInformation[0] = 0 then
+      if ExceptionRecord.ExceptionInformation[0] = 0 then
         TFile.RaiseError(ERROR_READ_FAULT)
       else
         TFile.RaiseError(ERROR_WRITE_FAULT);
     end;
   end;
 end;
+{$WARN SYMBOL_PLATFORM ON}
 
 end.

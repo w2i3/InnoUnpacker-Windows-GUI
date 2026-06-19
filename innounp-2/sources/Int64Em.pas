@@ -35,152 +35,124 @@ implementation
 uses
   SysUtils;
 
+function Integer64ToUInt64(const X: Integer64): UInt64; inline;
+begin
+  Result := (UInt64(X.Hi) shl 32) or UInt64(X.Lo);
+end;
+
+procedure UInt64ToInteger64(const Value: UInt64; var X: Integer64); inline;
+begin
+  X.Lo := LongWord(Value);
+  X.Hi := LongWord(Value shr 32);
+end;
+
 function Compare64(const N1, N2: Integer64): Integer;
 { If N1 = N2, returns 0.
   If N1 > N2, returns 1.
   If N1 < N2, returns -1. }
-asm
-  { Compare high words }
-  mov  ecx, [eax+4]
-  cmp  ecx, [edx+4]
-  ja   @@return1
-  jb   @@returnminus1
-  { High words equal; compare low words }
-  mov  ecx, [eax]
-  cmp  ecx, [edx]
-  ja   @@return1
-  jb   @@returnminus1
-  jmp  @@return0
-@@return1:
-  xor  eax, eax
-  inc  eax
-  jmp  @@exit
-@@returnminus1:
-  or   eax, -1
-  jmp  @@exit
-@@return0:
-  xor  eax,eax
-@@exit:
+begin
+  if (N1.Hi > N2.Hi) or ((N1.Hi = N2.Hi) and (N1.Lo > N2.Lo)) then
+    Result := 1
+  else if (N1.Hi < N2.Hi) or ((N1.Hi = N2.Hi) and (N1.Lo < N2.Lo)) then
+    Result := -1
+  else
+    Result := 0;
 end;
 
 procedure Dec64(var X: Integer64; N: LongWord);
-asm
-  sub  [eax], edx
-  sbb  dword ptr [eax+4], 0
+var
+  OldLo: LongWord;
+begin
+  OldLo := X.Lo;
+  if OldLo < N then begin
+    X.Lo := LongWord((UInt64(1) shl 32) + UInt64(OldLo) - UInt64(N));
+    Dec(X.Hi);
+  end else
+    X.Lo := OldLo - N;
 end;
 
 procedure Dec6464(var X: Integer64; const N: Integer64);
-asm
-  mov  ecx, [edx]
-  sub  [eax], ecx
-  mov  ecx, [edx+4]
-  sbb  [eax+4], ecx
+var
+  Borrow: LongWord;
+begin
+  if X.Lo < N.Lo then begin
+    X.Lo := LongWord((UInt64(1) shl 32) + UInt64(X.Lo) - UInt64(N.Lo));
+    Borrow := 1;
+  end else begin
+    X.Lo := X.Lo - N.Lo;
+    Borrow := 0;
+  end;
+  Dec(X.Hi, N.Hi);
+  if Borrow <> 0 then
+    Dec(X.Hi);
 end;
 
 function Inc64(var X: Integer64; N: LongWord): Boolean;
 { Adds N to X. In case of overflow, False is returned. }
-asm
-  add  [eax], edx
-  adc  dword ptr [eax+4], 0
-  setnc al
+var
+  SumLo, SumHi: UInt64;
+begin
+  SumLo := UInt64(X.Lo) + UInt64(N);
+  X.Lo := LongWord(SumLo);
+  SumHi := UInt64(X.Hi) + (SumLo shr 32);
+  X.Hi := LongWord(SumHi);
+  Result := (SumHi shr 32) = 0;
 end;
 
 function Inc6464(var X: Integer64; const N: Integer64): Boolean;
 { Adds N to X. In case of overflow, False is returned. }
-asm
-  mov  ecx, [edx]
-  add  [eax], ecx
-  mov  ecx, [edx+4]
-  adc  [eax+4], ecx
-  setnc al
+var
+  SumLo, SumHi: UInt64;
+begin
+  SumLo := UInt64(X.Lo) + UInt64(N.Lo);
+  X.Lo := LongWord(SumLo);
+  SumHi := UInt64(X.Hi) + UInt64(N.Hi) + (SumLo shr 32);
+  X.Hi := LongWord(SumHi);
+  Result := (SumHi shr 32) = 0;
 end;
 
 procedure Multiply32x32to64(N1, N2: LongWord; var X: Integer64);
 { Multiplies two 32-bit unsigned integers together and places the result
   in X. }
-asm
-  mul  edx    { Multiplies EAX by EDX, places 64-bit result in EDX:EAX }
-  mov  [ecx], eax
-  mov  [ecx+4], edx
+var
+  Product: UInt64;
+begin
+  Product := UInt64(N1) * UInt64(N2);
+  UInt64ToInteger64(Product, X);
 end;
 
 function Mul64(var X: Integer64; N: LongWord): Boolean;
 { Multiplies X by N, and overwrites X with the result. In case of overflow,
   False is returned (X is valid but truncated to 64 bits). }
-asm
-  push esi
-  push ebx
-  mov  esi, eax
-  mov  ecx, edx
+var
+  HighProduct, LowProduct, NewHi: UInt64;
+begin
+  HighProduct := UInt64(X.Hi) * UInt64(N);
+  LowProduct := UInt64(X.Lo) * UInt64(N);
 
-  { Multiply high part }
-  mov  eax, [esi+4]
-  mul  ecx            { CF set if resulting EDX <> 0 }
-  setnc bl
-  mov  [esi+4], eax
+  X.Lo := LongWord(LowProduct);
+  NewHi := (HighProduct and $FFFFFFFF) + (LowProduct shr 32);
+  X.Hi := LongWord(NewHi);
 
-  { Multiply low part, carry to high part }
-  mov  eax, [esi]
-  mul  ecx
-  mov  [esi], eax
-  add  [esi+4], edx   { CF set on overflow }
-  setnc al
-  and  al, bl
-
-  pop  ebx
-  pop  esi
+  Result := ((HighProduct shr 32) = 0) and ((NewHi shr 32) = 0);
 end;
 
 function Div64(var X: Integer64; const Divisor: LongWord): LongWord;
 { Divides X by Divisor, and overwrites X with the quotient. Returns the
   remainder. }
-asm
-  push ebx
-  push esi
-  mov  esi, eax
-  mov  ecx, edx
-
-  mov  eax, [esi]
-  mov  ebx, [esi+4]
-
-  { Divide EBX:EAX by ECX. Quotient is stored in EBX:EAX, remainder in EDX. }
-  xchg eax, ebx
-  xor  edx, edx
-  div  ecx
-  xchg eax, ebx
-  div  ecx
-
-  mov  [esi], eax
-  mov  [esi+4], ebx
-  mov  eax, edx
-
-  pop  esi
-  pop  ebx
+var
+  Value: UInt64;
+begin
+  Value := Integer64ToUInt64(X);
+  Result := LongWord(Value mod UInt64(Divisor));
+  UInt64ToInteger64(Value div UInt64(Divisor), X);
 end;
 
 function Mod64(const X: Integer64; const Divisor: LongWord): LongWord;
 { Divides X by Divisor and returns the remainder. Unlike Div64, X is left
   intact. }
-asm
-  push ebx
-  push esi
-  mov  esi, eax
-  mov  ecx, edx
-
-  mov  eax, [esi]
-  mov  ebx, [esi+4]
-
-  { Divide EBX:EAX by ECX. Quotient is stored in EBX:EAX, remainder in EDX. }
-  xchg eax, ebx
-  xor  edx, edx
-  div  ecx
-  xchg eax, ebx
-  div  ecx
-
-  mov  eax, edx
-
-  pop  esi
-  pop  ebx
+begin
+  Result := LongWord(Integer64ToUInt64(X) mod UInt64(Divisor));
 end;
 
 function StrToInteger64(const S: String; var X: Integer64): Boolean;
